@@ -74,7 +74,7 @@ class MainApp(QWidget):
 
         self.code_label = QLabel("Barcode:")
 
-        validator = QRegularExpressionValidator(QRegularExpression("[0-9]{9}"))
+        validator = QRegularExpressionValidator(QRegularExpression("[0-9]{48}"))
 
         self.line_edit = QLineEdit()
         self.line_edit.setPlaceholderText("штрих-код")
