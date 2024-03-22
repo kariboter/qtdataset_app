@@ -1,58 +1,70 @@
 import sys
 import cv2
 from pathlib import Path
-from PySide6.QtCore import Qt, QTimer, QRegularExpression
+from PySide6.QtCore import Qt, QTimer, QRegularExpression, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap, QImage, QRegularExpressionValidator
-from PySide6.QtWidgets import QApplication, QLabel, QGridLayout, QWidget, QPushButton, QLineEdit
-from pyzbar.pyzbar import decode # Библиотека считывания шрих-кодов
+from PySide6.QtWidgets import QApplication, QLabel, QGridLayout, QWidget, QPushButton, QLineEdit, QVBoxLayout
+from pyzbar.pyzbar import decode  # Библиотека считывания шрих-кодов
+import numpy as np
 # TODO: на данный момент библиотека pyzbar работает только с черно-белой камерой. Нужно разобраться почему так
 import uuid
 
 
 # Инициализация виджета камеры
-class VideoWidget(QWidget):
-    def __init__(self, camera_index):
+class CameraWorker(QThread):
+    image_data = Signal(QImage)
+
+    def __init__(self, camera_id):
         super().__init__()
-        self.video_label = QLabel()
-        self.camera_index = camera_index
-        self.cap = cv2.VideoCapture(self.camera_index)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.camera_id = camera_id
+        self.capture = cv2.VideoCapture(self.camera_id)
+        _, self.frame = self.capture.read()
+        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 4096)
+        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
+        self.is_running = True
+
+    def run(self):
+        while self.is_running:
+            ret, self.frame = self.capture.read()
+            if ret:
+                rgb_image = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
+                resized = cv2.resize(rgb_image, (320, 240))
+                h, w, ch = resized.shape
+                image = QImage(resized.data, w, h, ch * w, QImage.Format_RGB888)
+                self.image_data.emit(image)
+
+    def stop(self):
+        self.is_running = False
 
 
+class CameraWidget(QWidget):
+    def __init__(self, camera_id):
+        super().__init__()
+        self.camera_id = camera_id
+        self.label = QLabel()
 
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
-        self.timer.start(50)
+        self.current_image = None
 
+        self.camera_worker = CameraWorker(self.camera_id)
+        self.camera_worker.image_data.connect(self.update_image)
+        self.camera_worker.start()
 
+    @Slot(QImage)
+    def update_image(self, image):
+        self.current_image = image
+        pixmap = QPixmap.fromImage(image)
+        self.label.setPixmap(pixmap)
 
-    # метод отоброжение видео в приложении
-    def update_frame(self):
-        ret, frame = self.cap.read()
-        if ret:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_rgb = cv2.resize(frame_rgb, (320, 240))
-            frame_qimg = QImage(frame_rgb, frame_rgb.shape[1], frame_rgb.shape[0], QImage.Format_RGB888)
-            self.video_label.setPixmap(QPixmap.fromImage(frame_qimg))
-
-    # метод сохранения фотографий с уникальным индексом
     def take_photo(self, code):
-        ret, frame = self.cap.read()
-        if ret:
-            filename = f"Dataset/{code}/{self.camera_index}_{uuid.uuid1()}.jpg"
-            cv2.imwrite(filename, frame)
+        filename = f"Dataset/{code}/{self.camera_id}_{uuid.uuid1()}.jpg"
+        cv2.imwrite(filename, self.camera_worker.frame)
 
-    # метод считывания штрих-кодов
     def read_barcode(self):
-        ret, frame = self.cap.read()
-        if ret:
-
-            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            barcodes = decode(frame_gray)
-            for barcode in barcodes:
-                barcode_data = barcode.data.decode('utf-8')
-                return barcode_data
+        frame_gray = cv2.cvtColor(self.camera_worker.frame, cv2.COLOR_BGR2GRAY)
+        barcodes = decode(frame_gray)
+        for barcode in barcodes:
+            barcode_data = barcode.data.decode('utf-8')
+            return barcode_data
 
 
 class MainApp(QWidget):
@@ -61,12 +73,12 @@ class MainApp(QWidget):
         self.layout = QGridLayout()
         self.folder_code = None
         # TODO: добавить количество камер и сделать динамический выбор
-        self.camera_widget1 = VideoWidget(0)  # Инициализация камеры под индексом 0
-        self.camera_widget2 = VideoWidget(1)  # Инициализация камеры под индексом 4
-        self.camera_widget3 = VideoWidget(2)
-        self.camera_widget4 = VideoWidget(3)
+        # self.camera_widget1 = CameraWidget(2)  # Инициализация камеры под индексом 0
+        self.camera_widget2 = CameraWidget(0)  # Инициализация камеры под индексом 4
+        # self.camera_widget3 = CameraWidget(4)
+        self.camera_widget4 = CameraWidget(3)
 
-        self.take_photo_button = QPushButton("Take Photo") # кнопка фотографирования
+        self.take_photo_button = QPushButton("Take Photo")  # кнопка фотографирования
         self.take_photo_button.clicked.connect(self.take_photo)
 
         self.scan_button = QPushButton('Scan Barcode')
@@ -74,17 +86,17 @@ class MainApp(QWidget):
 
         self.code_label = QLabel("Barcode:")
 
-        validator = QRegularExpressionValidator(QRegularExpression("[0-9]{48}"))
+        validator = QRegularExpressionValidator(QRegularExpression("^\d+$"))
 
         self.line_edit = QLineEdit()
         self.line_edit.setPlaceholderText("штрих-код")
         self.line_edit.returnPressed.connect(self.return_pressed)
         self.line_edit.setValidator(validator)
 
-        self.layout.addWidget(self.camera_widget1.video_label, 0, 0)
-        self.layout.addWidget(self.camera_widget1.video_label, 0, 1)
-        self.layout.addWidget(self.camera_widget1.video_label, 1, 0)
-        self.layout.addWidget(self.camera_widget1.video_label, 1, 1)
+        # self.layout.addWidget(self.camera_widget1.label, 0, 0)
+        self.layout.addWidget(self.camera_widget2.label, 0, 1)
+        # self.layout.addWidget(self.camera_widget3.label, 1, 0)
+        self.layout.addWidget(self.camera_widget4.label, 1, 1)
 
         self.layout.addWidget(self.code_label, 4, 0, 1, 2, alignment=Qt.AlignCenter)
         self.layout.addWidget(self.line_edit, 5, 0, 1, 2, alignment=Qt.AlignCenter)
@@ -96,7 +108,7 @@ class MainApp(QWidget):
     def take_photo(self):
         if self.folder_code is not None:
             Path(f"Dataset/{self.folder_code}").mkdir(parents=True, exist_ok=True)
-            for camera_widget in [self.camera_widget1, self.camera_widget2]:
+            for camera_widget in [self.camera_widget2, self.camera_widget4]:
                 camera_widget.take_photo(self.folder_code)
         else:
             self.code_label.setText("Сначала простканируйте штрихкод товара")
@@ -114,6 +126,7 @@ class MainApp(QWidget):
         self.folder_code = code
         self.line_edit.clear()
         self.code_label.setText("Barcode: " + str(code))
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
