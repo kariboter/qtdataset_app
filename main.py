@@ -1,9 +1,9 @@
 import sys
 import cv2
 from pathlib import Path
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtWidgets import QApplication, QLabel, QGridLayout, QWidget, QPushButton
+from PySide6.QtCore import Qt, QTimer, QRegularExpression
+from PySide6.QtGui import QPixmap, QImage, QRegularExpressionValidator
+from PySide6.QtWidgets import QApplication, QLabel, QGridLayout, QWidget, QPushButton, QLineEdit
 from pyzbar.pyzbar import decode # Библиотека считывания шрих-кодов
 # TODO: на данный момент библиотека pyzbar работает только с черно-белой камерой. Нужно разобраться почему так
 import uuid
@@ -16,17 +16,24 @@ class VideoWidget(QWidget):
         self.video_label = QLabel()
         self.camera_index = camera_index
         self.cap = cv2.VideoCapture(self.camera_index)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(50)
+
+
 
     # метод отоброжение видео в приложении
     def update_frame(self):
         ret, frame = self.cap.read()
         if ret:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_qimg = QImage(frame_rgb, frame.shape[1], frame.shape[0], QImage.Format_RGB888)
+            frame_rgb = cv2.resize(frame_rgb, (320, 240))
+            frame_qimg = QImage(frame_rgb, frame_rgb.shape[1], frame_rgb.shape[0], QImage.Format_RGB888)
             self.video_label.setPixmap(QPixmap.fromImage(frame_qimg))
 
     # метод сохранения фотографий с уникальным индексом
@@ -40,8 +47,9 @@ class VideoWidget(QWidget):
     def read_barcode(self):
         ret, frame = self.cap.read()
         if ret:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            barcodes = decode(frame_rgb)
+
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            barcodes = decode(frame_gray)
             for barcode in barcodes:
                 barcode_data = barcode.data.decode('utf-8')
                 return barcode_data
@@ -54,7 +62,9 @@ class MainApp(QWidget):
         self.folder_code = None
         # TODO: добавить количество камер и сделать динамический выбор
         self.camera_widget1 = VideoWidget(0)  # Инициализация камеры под индексом 0
-        self.camera_widget2 = VideoWidget(4)  # Инициализация камеры под индексом 4
+        self.camera_widget2 = VideoWidget(1)  # Инициализация камеры под индексом 4
+        self.camera_widget3 = VideoWidget(2)
+        self.camera_widget4 = VideoWidget(3)
 
         self.take_photo_button = QPushButton("Take Photo") # кнопка фотографирования
         self.take_photo_button.clicked.connect(self.take_photo)
@@ -64,11 +74,22 @@ class MainApp(QWidget):
 
         self.code_label = QLabel("Barcode:")
 
+        validator = QRegularExpressionValidator(QRegularExpression("[0-9]{9}"))
+
+        self.line_edit = QLineEdit()
+        self.line_edit.setPlaceholderText("штрих-код")
+        self.line_edit.returnPressed.connect(self.return_pressed)
+        self.line_edit.setValidator(validator)
+
         self.layout.addWidget(self.camera_widget1.video_label, 0, 0)
-        self.layout.addWidget(self.camera_widget2.video_label, 0, 1)
-        self.layout.addWidget(self.code_label, 3, 0, 1, 2, alignment=Qt.AlignCenter)
-        self.layout.addWidget(self.take_photo_button, 1, 0, 1, 2, )
-        self.layout.addWidget(self.scan_button, 2, 0, 1, 2)
+        self.layout.addWidget(self.camera_widget1.video_label, 0, 1)
+        self.layout.addWidget(self.camera_widget1.video_label, 1, 0)
+        self.layout.addWidget(self.camera_widget1.video_label, 1, 1)
+
+        self.layout.addWidget(self.code_label, 4, 0, 1, 2, alignment=Qt.AlignCenter)
+        self.layout.addWidget(self.line_edit, 5, 0, 1, 2, alignment=Qt.AlignCenter)
+        self.layout.addWidget(self.take_photo_button, 2, 0, 1, 2, )
+        self.layout.addWidget(self.scan_button, 3, 0, 1, 2)
         self.setLayout(self.layout)
 
     # метод, вызываемый нажатием кнопки "Take photo"
@@ -88,6 +109,11 @@ class MainApp(QWidget):
             self.folder_code = code
             self.code_label.setText("Barcode: " + str(code))
 
+    def return_pressed(self):
+        code = self.line_edit.text()
+        self.folder_code = code
+        self.line_edit.clear()
+        self.code_label.setText("Barcode: " + str(code))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
